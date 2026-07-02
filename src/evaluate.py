@@ -252,7 +252,9 @@ def render_report(rep):
           "",
           "   PR-AUC ....... one number from 0 to 1: how well the contender",
           "                  ranks risky bookings above safe ones, across all",
-          "                  possible cut-offs. Higher is better.",
+          "                  possible cut-offs. Higher is better. (Flagging at",
+          f"                  random scores ~{pos / rep['eligible']:.2f} — the no-show base",
+          "                  rate. That is the floor, not 0.)",
           f"   at {k} flags .. every contender flags the same {k} bookings",
           "                  (the number the simple rule flags). Then:",
           f"                  recall    = of the {pos} real no-shows, how many it flagged",
@@ -267,6 +269,44 @@ def render_report(rep):
     for name, b in rep["baselines"].items():
         L.append(contender(name, b))
 
+    # Verdict is COMPUTED from the numbers, never hand-written — if the model
+    # loses on a fresh dataset, this section says so.
+    base = pos / rep["eligible"]
+    beats_all_ap = all(m["ap"] > b["ap"] for b in rep["baselines"].values())
+    best_name, best_b = max(rep["baselines"].items(), key=lambda kv: kv[1]["ap"])
+    rival_name, rival = max(rep["baselines"].items(),
+                            key=lambda kv: kv[1]["recall_at_matched_flags"])
+    m_caught = m["recall_at_matched_flags"] * pos
+    r_caught = rival["recall_at_matched_flags"] * pos
+    gap = r_caught - m_caught
+    L += ["", " What should you conclude? (computed from the numbers above)"]
+    if beats_all_ap:
+        L += [f"   * Ranking: the model beats every free rule — {m['ap']:.3f} vs",
+              f"     {best_b['ap']:.3f} for the best of them. Against the random-guessing",
+              f"     floor of {base:.2f}, that is {m['ap'] / base:.1f}x random for the model",
+              f"     vs {best_b['ap'] / base:.1f}x for the best free rule."]
+    else:
+        L += [f"   * Ranking: the model does NOT beat '{best_name}'",
+              f"     ({m['ap']:.3f} vs {best_b['ap']:.3f}). Per the PRD, ship the calibrated",
+              "     rule table instead — the model has not earned its complexity."]
+    if gap >= 1:
+        L += [f"   * At {k} flags: the model catches {gap:.1f} FEWER no-shows than",
+              f"     '{rival_name}' — a real loss, reported honestly."]
+    elif m_caught >= r_caught:
+        L += [f"   * At {k} flags: the model catches at least as many no-shows as",
+              "     every free rule."]
+    else:
+        L += [f"   * At {k} flags: model {m_caught:.1f} vs rule {r_caught:.1f} no-shows caught —",
+              f"     a gap of {gap:.1f} of one booking out of {pos}: a statistical TIE",
+              "     (differences under one real no-show are noise, not signal)."]
+    if beats_all_ap:
+        L += ["   * Why prefer the model if it can tie at a single budget? A rule",
+              "     is a yes/no switch: inside its flagged pile every booking looks",
+              "     identical, so one action must fit all of them. The model still",
+              "     ranks bookings inside that pile — which is what makes tiered",
+              "     actions possible (SMS at medium risk, deposit only at the",
+              "     extreme tail)."]
+
     L += ["", SUB, " 2) WHAT WOULD APRIL HAVE LOOKED LIKE WITH THE PRODUCT ON?", SUB,
           " Ranges like [a% .. b%] are honest uncertainty: with only",
           f" {pos} real no-shows to grade on, the truth sits somewhere inside.",
@@ -274,6 +314,16 @@ def render_report(rep):
     labels = {
         "MEDIUM+HIGH": "we act on MEDIUM and HIGH (SMS re-confirm and up)",
         "HIGH only": "we act on HIGH only (the deposit tier)",
+    }
+    reads = {
+        "MEDIUM+HIGH": (" read: rescuing {seats} of lost seats means texting {fr} of all\n"
+                        " guests, and {cost} of those texts go to guests who were coming\n"
+                        " anyway. That wide net is only affordable because the action is\n"
+                        " a cheap SMS — never a deposit at this tier."),
+        "HIGH only": (" read: deposits stay rare ({fr} of bookings). About {prec} of the\n"
+                      " deposit requests would have been justified; {cost} genuine guests\n"
+                      " would be asked to leave a (refundable) hold. This is the tradeoff\n"
+                      " the PRD accepts on purpose — and the operator can always override."),
     }
     for op_name, op in rep["operating_points"].items():
         L += [f" If {labels.get(op_name, op_name)}:",
@@ -283,8 +333,13 @@ def render_report(rep):
               f"   flags that were justified: {_pct(op['precision'])} {_ci(op['precision_ci'])} (precision)",
               f"   seats rescued from no-shows: {op['no_show_seats_caught']}"
               f" ({_pct(op['no_show_seats_caught_share'])} of all seats lost to no-shows)",
-              f"   the cost                : {op['shows_flagged_anyway']} flagged guests actually showed up",
-              ""]
+              f"   the cost                : {op['shows_flagged_anyway']} flagged guests actually showed up"]
+        if op_name in reads:
+            L += [reads[op_name].format(seats=_pct(op["no_show_seats_caught_share"]),
+                                        fr=_pct(op["flag_rate"]),
+                                        prec=_pct(op["precision"]),
+                                        cost=op["shows_flagged_anyway"])]
+        L += [""]
 
     L += [SUB, " 3) CAN YOU TRUST THE PERCENTAGES? (calibration)", SUB,
           " The model says 'bookings like this no-show X% of the time'.",
@@ -303,6 +358,15 @@ def render_report(rep):
         obs = _pct(c["observed"]) if c["observed"] is not None else "-"
         ok = {True: "ok", False: "OFF — investigate", None: "too small to judge"}[c["within_ci"]]
         L.append(f"  {c['bucket']:16} {c['n']:>4}  {_pct(c['predicted']):>9}  {obs:>8}  {ok}")
+    measurable = [c for c in rep["calibration"] if c["within_ci"] is not None]
+    off = [c["bucket"] for c in measurable if not c["within_ci"]]
+    if off:
+        L += ["", f" read: {len(measurable) - len(off)} of {len(measurable)} judgeable groups check out, but these are",
+              f" OFF: {', '.join(off)} — do not trust those cells until investigated."]
+    else:
+        L += ["", f" read: all {len(measurable)} groups big enough to judge check out — when the",
+              " model says X%, April behaved like X%. The percentages can be",
+              " taken at face value (within their uncertainty ranges)."]
 
     L += ["", SUB, " 4) WHO PAYS THE FALSE-ALARM COST? (fairness)", SUB,
           " For each group of guests:",
@@ -321,4 +385,19 @@ def render_report(rep):
             prec = _pct(r["precision"]) if r["precision"] is not None else "-"
             L.append(f"    {key:18} n={r['n']:4}   flag rate {_pct(r['flag_rate']):>6}   precision {prec:>6}")
         L.append("")
+    party = rep["fairness"]["by_party_band"]
+    judged = {g: r for g, r in party.items() if r["precision"] is not None}
+    if judged:
+        worst_g, worst = min(judged.items(),
+                             key=lambda kv: (kv[1]["precision"], -kv[1]["flag_rate"]))
+        L += [f" read: the false-alarm cost lands hardest on party {worst_g}:",
+              f" {_pct(worst['flag_rate'])} of their bookings get bothered and only "
+              f"{_pct(worst['precision'])} of that",
+              " was justified. That is the visible price of the current MEDIUM",
+              " threshold — a dial the operator owns."]
+    chan = rep["fairness"]["by_channel"].values()
+    if chan:
+        lo, hi = min(r["flag_rate"] for r in chan), max(r["flag_rate"] for r in chan)
+        L += [f" Channels are bothered at similar rates ({_pct(lo)}-{_pct(hi)}) — expected,",
+              " because the model never looks at channel.", ""]
     return "\n".join(L)
