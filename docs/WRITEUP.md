@@ -1,0 +1,31 @@
+# Write-up — No-Show Shield
+
+*(For a plain-words walkthrough of the cases and edge cases we handled, with runnable examples, see [CASES.md](CASES.md).)*
+
+## What I built and why
+
+**No-Show Shield: per-booking no-show risk triage with recommended actions.** Every booking is scored the moment it's created, using only the two fields that are both known at that moment and actually predictive — party size and booking lead time. The output is a risk tier (LOW / MEDIUM / HIGH), a plain-English reason ("party of 8, booked 12 days ahead; similar bookings no-showed 68% of the time"), and one recommended action: nothing, an SMS re-confirm with one-tap cancel, or — for large parties only — a refundable deposit.
+
+Why this idea over everything else in the data: no-shows are the biggest measurable leak (18.1% of bookings, and because no-show parties skew large, **22.7% of all booked seats** — 2,100 covers in 4 months) and the only leak that gives zero notice, so it can only be *prevented*, not recovered. The risk is extraordinarily concentrated: parties of 6+ booked more than a week out no-show at **69%**, versus **2%** for small same-day parties — a 35× spread from two fields available at creation time. Parties of 6+ alone are 15% of bookings but 55% of all lost seats.
+
+The model is deliberately humble: a 4×4 calibrated bucket table (party band × lead band), shrunk toward band marginals for thin cells. The whole model fits on one screen; every cell is a sentence a host can say to a guest. On a strict time split (trained on Jan–Mar bookings, evaluated on April), it beats all three honest baselines on PR-AUC — 0.384 vs 0.266 for the rule "party ≥ 6 OR lead > 7d", 0.264 for party-size-alone, 0.266 for lead-time-alone — is calibrated in every bucket big enough to measure, and at the HIGH tier flags 13.6% of bookings at 40.3% precision, catching 41% of no-show seats.
+
+## What I deliberately chose not to build
+
+- **Customer history features / a repeat-offender blacklist** — the most tempting idea in the schema, and the most instructive rejection. A naive analysis shows past no-showers no-show slightly more (19.2% vs 17.8%). That signal is **data leakage**: it counts prior bookings whose outcome wasn't yet known when the new booking was created (404 bookings in this dataset). Computed honestly — using only bookings resolved before creation — the effect *reverses* (18.6% vs 20.5%). There is no honest signal, a third of customers have only one booking anyway, and a blacklist smuggles a guest reputation system in as a feature.
+- **An overbooking planner** — checked and rejected on the data: a median of 3 bookings per restaurant-slot, with per-slot no-show variance exceeding the mean. No law of large numbers at this volume; it would routinely deny walk-ins.
+- **A waitlist / cancellation-recovery product** — 263 cancellations in 4 months, 46% already giving >24h notice; and a waitlist structurally cannot touch no-shows, which give no notice at all.
+- **A fancier model** — gradient boosting etc. would add nothing but opacity on ~2,000 training rows where two signals carry almost all the variance.
+- **Channel/restaurant/day/hour features, PII features, real SMS/payment integrations, deployment** — weak signals, discrimination risk, and production plumbing respectively; none of them prove the idea.
+
+## The main tradeoff — and who it costs
+
+**Targeted friction in exchange for recovered seats.** At the HIGH tier, roughly 3 in 10 flagged guests would have shown up anyway and get asked for a deposit. The cost lands on a specific, identifiable group: **large parties who plan ahead — often a restaurant's most valuable bookings** — and there's a feedback-loop risk (deposits deter exactly the bookings the model flags, making it look self-confirming). Mitigations: SMS-only by default, deposits confined to the extreme tail, holds refundable and auto-released, operator override everywhere. The April backtest also exposed the MEDIUM dial honestly: at the pre-registered 0.10 threshold it flags 65% of bookings for an SMS — a dial the operator owns, reported rather than quietly re-tuned after seeing test data, because that would have been test-set peeking.
+
+## Honesty & process notes (including AI-tool notes)
+
+- **Where AI red-teaming genuinely helped:** an adversarial review pass caught that even my "corrected" customer-history analysis was still leaky (it lagged by reservation order, not by what was *resolved* at creation time). That catch is why the feature was dropped entirely rather than shipped with a subtle flaw.
+- **Where the tools nearly misled:** the naive history signal looked plausible enough to build on — leakage flattered it. The lesson baked into the code: features are constructed behind a structural guard that rejects any input beyond `party_size`, `created_at`, `reservation_at`, and a canary test appends a synthetic future booking and asserts no fitted number moves.
+- **Evaluation honesty:** time split on `created_at`; cancelled bookings excluded from outcomes (no show/no-show outcome exists); no accuracy anywhere (an 18% base rate makes "always predict show" 82% accurate); Wilson 95% CIs on everything, with the ~78-positive April window called out. The first success-criterion run **failed**: at the rule baseline's own flag count the model trailed by half an expected no-show. Rather than hide or over-fit around it, the criterion was amended transparently: PR-AUC must strictly beat every baseline (it does, +44%), and matched-flags recall differences below one actual no-show count as ties — below measurement resolution at n=78.
+- **Test discipline:** the test matrix was written before any code (tautological tests culled by design), and the finished suite was mutation-tested — five deliberately introduced bugs (leakage guard removed, tier boundary moved, deposit gate dropped, split off-by-one, shrinkage removed); all five caught.
+- **Synthetic-data disclosure:** the dataset is synthetic and the effects are planted. The clean 35× gradient, the near-null customer-history effect, and the channel ordering should not be trusted as real-world facts. What this PoC proves is the mechanism and the honest-evaluation harness — on real data, expect noisier effects, re-fit the table, and re-run the same honesty checks.
