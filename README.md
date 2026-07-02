@@ -43,6 +43,7 @@ docs/
   design/PRD.md            spec: problem, decisions & rejected alternatives, success criteria
   design/TEST_MATRIX.md    test cases incl. honesty checks (leakage, time split, baselines)
   WRITEUP.md               what was built, what deliberately wasn't, the tradeoff & who pays
+  PROMPTS.md               the AI workflow and prompts behind the build
   brief.pdf                original exercise brief
 ```
 

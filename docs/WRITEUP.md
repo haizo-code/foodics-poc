@@ -24,6 +24,8 @@ The model is deliberately humble: a 4×4 calibrated bucket table (party band × 
 
 ## Honesty & process notes (including AI-tool notes)
 
+*(Full workflow and actual prompt excerpts: [PROMPTS.md](PROMPTS.md).)*
+
 - **Where AI red-teaming genuinely helped:** an adversarial review pass caught that even my "corrected" customer-history analysis was still leaky (it lagged by reservation order, not by what was *resolved* at creation time). That catch is why the feature was dropped entirely rather than shipped with a subtle flaw.
 - **Where the tools nearly misled:** the naive history signal looked plausible enough to build on — leakage flattered it. The lesson baked into the code: features are constructed behind a structural guard that rejects any input beyond `party_size`, `created_at`, `reservation_at`, and a canary test appends a synthetic future booking and asserts no fitted number moves.
 - **Evaluation honesty:** time split on `created_at`; cancelled bookings excluded from outcomes (no show/no-show outcome exists); no accuracy anywhere (an 18% base rate makes "always predict show" 82% accurate); Wilson 95% CIs on everything, with the ~78-positive April window called out. The first success-criterion run **failed**: at the rule baseline's own flag count the model trailed by half an expected no-show. Rather than hide or over-fit around it, the criterion was amended transparently: PR-AUC must strictly beat every baseline (it does, +44%), and matched-flags recall differences below one actual no-show count as ties — below measurement resolution at n=78.
