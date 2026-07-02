@@ -42,7 +42,16 @@ python3 -m src.demo score --party 4 --when "2026-05-14 20:00" --now "2026-05-02 
 The model has never seen 15, but it doesn't crash or guess wildly: it treats it as "a large party" (the 6+ group) and scores it like the biggest bookings it knows.
 
 **A guest who no-showed twice before books again.**
-Nothing changes — we deliberately do not use anyone's history. Two reasons, in plain words: (1) when we checked honestly, past no-showers did *not* no-show more — the "signal" only appears if you accidentally let the model peek at outcomes it couldn't have known yet (the full story is below); (2) using history means blacklisting people over old behavior, which we didn't want to smuggle in.
+Nothing changes — we deliberately do not use anyone's history. Not because it would be cheating: counting only no-shows that had **already happened and were confirmed** before the new booking was made is perfectly fair. We built exactly that, and ran the "ladder test": if repeat offenders are real, risk should climb with every extra confirmed offense. It doesn't:
+
+| Confirmed past no-shows | How often the NEXT booking is a no-show |
+|---|---|
+| 0 | 20.5% |
+| 1 | 20.2% |
+| 2 | 12.8% — *less*, not more |
+| 3+ | 20.0% (only 10 cases) |
+
+Flat — no ladder. In this data there are risky *bookings* (big group, booked far ahead), not risky *people*: a guest's old no-show happened because that old booking was risky, and the new booking's risk is already measured directly. Forcing history into the model anyway would teach it something silly — that two past no-shows make a guest *safer*. Two honest footnotes: real-world data might show a real ladder (we'd rerun this exact test before deciding), and a true serial offender — ten in a row, which doesn't exist here; the worst guest has four — is an abuse problem for a human policy, not a model feature. (The separate trap of *accidentally counting no-shows that hadn't happened yet* is covered in the honesty section below.)
 
 **A rare combination the model has barely seen.**
 If some party-size × timing combination had too little history (fewer than 20 bookings), the model wouldn't trust its own tiny sample — it leans on broader averages instead, and the explanation says "limited history for this combination." On this dataset every combination happens to have enough data, so the safeguard never fires here — but it's built and tested, because real data won't always be this generous.
