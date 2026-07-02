@@ -28,8 +28,11 @@ def cmd_worklist(args):
     scored = [t for t in scored if t[0].tier != "LOW"]
     scored.sort(key=lambda t: t[0].probability, reverse=True)
     scored = scored[:args.top]
-    print(f"Triage worklist — top {len(scored)} at-risk upcoming bookings "
-          f"(demo 'today' = split date; outcomes hidden, exactly as the host would see it)\n")
+    print(f"Triage worklist — the {len(scored)} riskiest upcoming bookings, riskiest first.")
+    print("(The demo pretends 'today' is the train/test split date, so these April")
+    print(" bookings are genuinely 'upcoming' — outcomes hidden, exactly as a host")
+    print(" would see them. Each line: risk tier, when, where, why — then the")
+    print(" recommended action.)\n")
     for s, b in scored:
         print(f"{s.tier:6} {b.reservation_at.strftime('%a %d %b %H:%M'):18} "
               f"{b.restaurant_name:16} {s.reason}")
@@ -49,16 +52,26 @@ def cmd_score(args):
 def cmd_backtest(args):
     bookings, flags, train, test, model = _fitted(args.csv)
     if flags:
-        print(f"Data quality: {len(flags)} flagged rows "
-              f"(e.g., {flags[0][0]}: {flags[0][1]})\n")
+        print(f"Data quality note: {len(flags)} odd rows were kept and flagged, not deleted")
+        print(f"  (e.g., {flags[0][0]}: {flags[0][1]})\n")
     print(render_report(evaluate(model, train, test)))
-    print("\nModel (the whole thing — every cell is a sentence):")
-    print(f"{'':8}" + "".join(f"{lb:>12}" for lb in ("<1d", "1-3d", "3-7d", ">7d")))
+    print("-" * 68)
+    print(" 5) THE ENTIRE MODEL, ON ONE SCREEN")
+    print("-" * 68)
+    print(" This table IS the model — nothing else is hidden anywhere.")
+    print(" Rows = party size. Columns = how far ahead the booking was made.")
+    print(" Each cell = the learned chance that such a booking never shows")
+    print(" up (from Jan-Mar bookings only). Read any cell as a sentence,")
+    print(" e.g. 'a party of 6+, booked over 7 days ahead, no-shows 68% of")
+    print(" the time'.\n")
+    heads = {"<1d": "same day", "1-3d": "1-3 days", "3-7d": "3-7 days", ">7d": "over 7d"}
+    print(f"{'':12}" + "".join(f"{heads[lb]:>12}" for lb in ("<1d", "1-3d", "3-7d", ">7d")))
     for pb in ("1-2", "3-4", "5", "6+"):
         row = [f"{model.table[(pb, lb)][0]:>11.0%}" + ("*" if model.table[(pb, lb)][2] else " ")
                for lb in ("<1d", "1-3d", "3-7d", ">7d")]
-        print(f"party {pb:3}" + "".join(row))
-    print("(* = thin training data, shrunk toward band average)")
+        print(f"party {pb:6}" + "".join(row))
+    print("\n (* would mark a cell with thin training data — its estimate")
+    print("  leans on broader averages; no cell needs it on this dataset)")
 
 
 def main():

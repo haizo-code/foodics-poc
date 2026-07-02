@@ -213,43 +213,112 @@ def _pct(x):
 
 
 def _ci(ci):
-    return f"[{ci[0]:.1%}, {ci[1]:.1%}]"
+    return f"[{ci[0]:.1%} .. {ci[1]:.1%}]"
+
+
+BAR = "=" * 68
+SUB = "-" * 68
 
 
 def render_report(rep):
-    L = []
-    L.append(f"Time split on created_at at {rep['split_at']} — train {rep['train_size']}, test {rep['test_size']}")
-    L.append(f"Evaluated on {rep['eligible']} test bookings with an outcome "
-             f"({rep['excluded_cancelled_from_eval']} cancelled excluded — no show/no-show outcome); "
-             f"{rep['positives']} no-shows.")
-    if rep["small_sample_warning"]:
-        L.append(f"WARNING: fewer than {MIN_TEST_POSITIVES} positives — every number below is fragile.")
-    L.append("")
-    L.append(f"Model vs baselines (recall/precision at the rule's own flag count = {rep['model']['matched_flag_count']}):")
     m = rep["model"]
-    L.append(f"  {'model (bucket table)':28} PR-AUC {m['ap']:.3f}  recall {_pct(m['recall_at_matched_flags'])}  precision {_pct(m['precision_at_matched_flags'])}")
+    k = m["matched_flag_count"]
+    pos = rep["positives"]
+    L = [BAR, " NO-SHOW SHIELD — HONEST BACKTEST", BAR]
+    L += [
+        f" The model learned ONLY from bookings created up to {rep['split_at']},",
+        " and is graded ONLY on later bookings it has never seen — like",
+        " studying with old exams, then sitting a brand-new one.",
+        "",
+        f"   bookings it learned from : {rep['train_size']}",
+        f"   bookings it is graded on : {rep['test_size']} (the 'new exam': April)",
+        f"   ... of which have a real outcome : {rep['eligible']}",
+        f"       ({rep['excluded_cancelled_from_eval']} cancelled excluded — a cancellation is neither",
+        "        a show nor a no-show, so it cannot be graded)",
+        f"   actual no-shows among those      : {pos} ({_pct(pos / rep['eligible'])})",
+        "",
+        " Wherever you see 'n' below, it means: how many bookings are in",
+        " that group. Small groups wobble — judge them gently.",
+    ]
+    if rep["small_sample_warning"]:
+        L += ["",
+              f" !! WARNING: fewer than {MIN_TEST_POSITIVES} real no-shows in the test window —",
+              "    every number below is too fragile to lean on."]
+
+    L += ["", SUB, " 1) DOES THE MODEL BEAT THE FREE ALTERNATIVES?", SUB,
+          " A manager could apply a simple free rule today (e.g. 'flag big",
+          " parties and far-ahead bookings'). If the model can't beat the",
+          " free rules, it shouldn't exist. Two scores per contender:",
+          "",
+          "   PR-AUC ....... one number from 0 to 1: how well the contender",
+          "                  ranks risky bookings above safe ones, across all",
+          "                  possible cut-offs. Higher is better.",
+          f"   at {k} flags .. every contender flags the same {k} bookings",
+          "                  (the number the simple rule flags). Then:",
+          f"                  recall    = of the {pos} real no-shows, how many it flagged",
+          "                  precision = of its flags, how many were real no-shows",
+          ""]
+
+    def contender(name, d, mark=""):
+        return (f"   {name:27} PR-AUC {d['ap']:.3f}   recall {_pct(d['recall_at_matched_flags']):>6}"
+                f"   precision {_pct(d['precision_at_matched_flags']):>6}{mark}")
+
+    L.append(contender("model (bucket table)", m, "   <-- ours"))
     for name, b in rep["baselines"].items():
-        L.append(f"  {name:28} PR-AUC {b['ap']:.3f}  recall {_pct(b['recall_at_matched_flags'])}  precision {_pct(b['precision_at_matched_flags'])}")
-    L.append("")
+        L.append(contender(name, b))
+
+    L += ["", SUB, " 2) WHAT WOULD APRIL HAVE LOOKED LIKE WITH THE PRODUCT ON?", SUB,
+          " Ranges like [a% .. b%] are honest uncertainty: with only",
+          f" {pos} real no-shows to grade on, the truth sits somewhere inside.",
+          ""]
+    labels = {
+        "MEDIUM+HIGH": "we act on MEDIUM and HIGH (SMS re-confirm and up)",
+        "HIGH only": "we act on HIGH only (the deposit tier)",
+    }
     for op_name, op in rep["operating_points"].items():
-        L.append(f"Operating point {op_name}: flags {op['flagged']}/{rep['eligible']} ({_pct(op['flag_rate'])})")
-        L.append(f"  precision {_pct(op['precision'])} {_ci(op['precision_ci'])}   recall {_pct(op['recall'])} {_ci(op['recall_ci'])}")
-        L.append(f"  no-show seats caught: {op['no_show_seats_caught']} ({_pct(op['no_show_seats_caught_share'])} of all no-show seats)")
-        L.append(f"  cost: {op['shows_flagged_anyway']} flagged guests actually showed up")
-    L.append("")
-    L.append("Calibration (predicted vs observed April rate; CI check where n >= 20):")
+        L += [f" If {labels.get(op_name, op_name)}:",
+              f"   bookings flagged        : {op['flagged']} of {rep['eligible']} ({_pct(op['flag_rate'])})",
+              f"   no-shows caught         : {op['true_no_shows']} of {pos}"
+              f"  -> recall {_pct(op['recall'])} {_ci(op['recall_ci'])}",
+              f"   flags that were justified: {_pct(op['precision'])} {_ci(op['precision_ci'])} (precision)",
+              f"   seats rescued from no-shows: {op['no_show_seats_caught']}"
+              f" ({_pct(op['no_show_seats_caught_share'])} of all seats lost to no-shows)",
+              f"   the cost                : {op['shows_flagged_anyway']} flagged guests actually showed up",
+              ""]
+
+    L += [SUB, " 3) CAN YOU TRUST THE PERCENTAGES? (calibration)", SUB,
+          " The model says 'bookings like this no-show X% of the time'.",
+          " Here its X (predicted) meets what April actually did (observed).",
+          " 'ok' = the observed rate sits inside the honest uncertainty",
+          " range of the prediction. Groups with under 20 bookings are",
+          " marked 'too small to judge' rather than pretending.",
+          "",
+          "  group = party size x how far ahead it was booked",
+          "  ('1-2 x <1d' = a 1-2 person booking made less than a day ahead)",
+          "",
+          f"  {'group':16} {'n':>4}  {'predicted':>9}  {'observed':>8}  verdict"]
     for c in rep["calibration"]:
         if c["n"] == 0:
             continue
         obs = _pct(c["observed"]) if c["observed"] is not None else "-"
-        ok = {True: "ok", False: "OFF", None: "n too small"}[c["within_ci"]]
-        L.append(f"  {c['bucket']:14} n={c['n']:4}  predicted {_pct(c['predicted'])}  observed {obs}  {ok}")
-    L.append("")
-    L.append("Fairness slices (flag rate / precision of flags):")
+        ok = {True: "ok", False: "OFF — investigate", None: "too small to judge"}[c["within_ci"]]
+        L.append(f"  {c['bucket']:16} {c['n']:>4}  {_pct(c['predicted']):>9}  {obs:>8}  {ok}")
+
+    L += ["", SUB, " 4) WHO PAYS THE FALSE-ALARM COST? (fairness)", SUB,
+          " For each group of guests:",
+          "   flag rate = what share of their bookings we would bother",
+          "               (SMS or more)",
+          "   precision = how often bothering them was justified",
+          " This makes the cost of false alarms visible per group instead",
+          " of hiding it inside an average. (Channel is never used by the",
+          " model — it is shown here purely to check who gets bothered.)",
+          ""]
+    titles = {"by_party_band": "by party size", "by_channel": "by booking channel"}
     for dim, rows in rep["fairness"].items():
-        L.append(f"  {dim}:")
+        L.append(f"  {titles.get(dim, dim)}:")
         for key in sorted(rows):
             r = rows[key]
             prec = _pct(r["precision"]) if r["precision"] is not None else "-"
-            L.append(f"    {key:20} n={r['n']:4}  flag rate {_pct(r['flag_rate'])}  precision {prec}")
+            L.append(f"    {key:18} n={r['n']:4}   flag rate {_pct(r['flag_rate']):>6}   precision {prec:>6}")
+        L.append("")
     return "\n".join(L)
