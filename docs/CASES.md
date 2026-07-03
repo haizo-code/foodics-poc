@@ -51,7 +51,17 @@ Nothing changes — we deliberately do not use anyone's history. Not because it 
 | 2 | 12.8% — *less*, not more |
 | 3+ | 20.0% (only 10 cases) |
 
-Flat — no ladder. In this data there are risky *bookings* (big group, booked far ahead), not risky *people*: a guest's old no-show happened because that old booking was risky, and the new booking's risk is already measured directly. Forcing history into the model anyway would teach it something silly — that two past no-shows make a guest *safer*. Two honest footnotes: real-world data might show a real ladder (we'd rerun this exact test before deciding), and a true serial offender — ten in a row, which doesn't exist here; the worst guest has four — is an abuse problem for a human policy, not a model feature. (The separate trap of *accidentally counting no-shows that hadn't happened yet* is covered in the honesty section below.)
+Flat — no ladder. And we know exactly what a *real* ladder looks like, because the two features we DID use pass the very same audition, on the very same bookings:
+
+| Candidate feature | Its ladder | Verdict |
+|---|---|---|
+| Party size (1–2 → 3–4 → 5 → 6+) | 14% → 15% → 23% → **46%** | climbs — used |
+| Days booked ahead (same day → 1–3d → 3–7d → over 7d) | 6% → 14% → 21% → **46%** | climbs — used |
+| Confirmed past no-shows (0 → 1 → 2 → 3+) | 20.5% → 20.2% → 12.8% → 20.0% | flat — dropped |
+
+Same audition for all three candidates; two climbed, one stayed flat. That is the whole justification for the model's feature choice in one glance. (All three rows are measured on the same bookings — those with a show/no-show outcome, across the full four months. The model itself learns only from Jan–Mar, where the same two ladders appear — its fitted table climbs from 4% to 68%.)
+
+In this data there are risky *bookings* (big group, booked far ahead), not risky *people*: a guest's old no-show happened because that old booking was risky, and the new booking's risk is already measured directly. Forcing history into the model anyway would teach it something silly — that two past no-shows make a guest *safer*. Two honest footnotes: real-world data might show a real ladder (we'd rerun this exact test before deciding), and a true serial offender — ten in a row, which doesn't exist here; the worst guest has four — is an abuse problem for a human policy, not a model feature. (The separate trap of *accidentally counting no-shows that hadn't happened yet* is covered in the honesty section below.)
 
 **A rare combination the model has barely seen.**
 If some party-size × timing combination had too little history (fewer than 20 bookings), the model wouldn't trust its own tiny sample — it leans on broader averages instead, and the explanation says "limited history for this combination." On this dataset every combination happens to have enough data, so the safeguard never fires here — but it's built and tested, because real data won't always be this generous.
